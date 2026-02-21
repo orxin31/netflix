@@ -125,13 +125,37 @@
             }
         }
 
-        // 이메일 본문 읽기 및 링크 추출
+        // 이메일 본문 읽기, 정보 추출 및 링크 클릭
         async function processEmail(messageId) {
             try {
                 const message = await gapi.client.gmail.users.messages.get({
                     'userId': 'me', 'id': messageId, 'format': 'full'
                 });
-
+        
+                // 1. 이메일 헤더에서 제목과 수신 시간 추출하기
+                const headers = message.result.payload.headers;
+                let subject = "제목 없음";
+                let dateStr = "";
+        
+                for (let i = 0; i < headers.length; i++) {
+                    if (headers[i].name.toLowerCase() === 'subject') {
+                        subject = headers[i].value;
+                    } else if (headers[i].name.toLowerCase() === 'date') {
+                        dateStr = headers[i].value;
+                    }
+                }
+        
+                // 수신 시간을 한국어 형식에 맞게 변환
+                let receivedDate = "시간 알 수 없음";
+                if (dateStr) {
+                    const dateObj = new Date(dateStr);
+                    receivedDate = dateObj.toLocaleString('ko-KR'); // 예: 2026. 2. 21. 오후 4:15:00
+                }
+        
+                // 화면에 제목과 수신 시간 먼저 출력
+                addHistory(`📧 <b>제목:</b> ${subject} <br>&nbsp;&nbsp;&nbsp;&nbsp;🕒 <b>수신:</b> ${receivedDate}`);
+        
+                // 2. 이메일 본문 추출
                 let bodyData = '';
                 const parts = message.result.payload.parts;
                 
@@ -141,22 +165,26 @@
                 } else {
                     bodyData = message.result.payload.body.data;
                 }
-
+        
                 if (!bodyData) return;
-
+        
+                // Base64Url 디코딩
                 const decodedBody = decodeURIComponent(escape(atob(bodyData.replace(/-/g, '+').replace(/_/g, '/'))));
+                
+                // 3. 정확한 위치 업데이트 링크 찾기
                 const linkRegex = /href="(https:\/\/www\.netflix\.com\/account\/update-primary-location\?nftoken=[^"]*)"/i;
                 const match = decodedBody.match(linkRegex);
-
+        
                 if (match && match[1]) {
-                    const authUrl = match[1];
-                    addHistory(`<span class="highlight">인증 링크 발견! 클릭 처리합니다.</span>`);
+                    const authUrl = match[1].replace(/&amp;/g, '&');
+                    
+                    addHistory(`<span class="highlight">▶ 정확한 위치 업데이트 링크 발견! 새 창으로 엽니다.</span>`);
                     window.open(authUrl, 'netflix_auth');
                 } else {
-                    addHistory("본문에서 인증 링크를 찾을 수 없습니다.");
+                    addHistory("본문에서 'update-primary-location' 링크를 찾을 수 없습니다.");
                 }
             } catch (error) {
-                addHistory("❌ 이메일 읽기 오류 발생");
+                addHistory("❌ 이메일 읽기 오류 발생: " + error.message);
             }
         }
     </script>
