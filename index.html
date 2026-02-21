@@ -7,9 +7,8 @@
         body { font-family: sans-serif; padding: 20px; }
         .box { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
         ul { list-style-type: none; padding: 0; }
-        li { padding: 5px 0; border-bottom: 1px dashed #eee; font-size: 14px; }
+        li { padding: 8px 0; border-bottom: 1px dashed #eee; font-size: 14px; line-height: 1.5; }
         .highlight { font-weight: bold; color: #d81f26; }
-        /* 입력창 영역은 숨김 처리 (또는 삭제) */
     </style>
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://apis.google.com/js/api.js" async defer></script>
@@ -18,8 +17,8 @@
 
     <div class="box">
         <h2>▶️ 넷플릭스 자동 확인 봇</h2>
-        <p>※ 주의: 브라우저의 <strong>팝업 차단이 해제</strong>되어 있어야 구글 로그인이 진행됩니다. 이 창을 닫으면 작동이 중지됩니다.</p>
-        <button onclick="stopBot()" id="stopBtn">봇 정지</button>
+        <p>※ 주의: 브라우저의 <strong>팝업 차단이 해제</strong>되어 있어야 최초 구글 로그인이 진행됩니다. 이 창을 닫으면 작동이 중지됩니다.</p>
+        <button onclick="stopBot()" id="stopBtn" disabled>봇 정지</button>
         <button onclick="startBot()" id="manualStartBtn" style="display: none;">수동으로 봇 시작하기</button>
     </div>
 
@@ -30,7 +29,7 @@
     </div>
 
     <script>
-        // ★ 여기에 본인의 구글 Client ID를 붙여넣으세요! (따옴표 유지)
+        // ★ 본인의 구글 Client ID를 유지하세요.
         const MY_CLIENT_ID = '159608186065-d0v0vh3cejhed2m4h02hbjcjhfon2kqq.apps.googleusercontent.com'; 
         
         let botInterval;
@@ -38,13 +37,13 @@
         let accessToken = null;
         let isGapiLoaded = false;
 
-        // 처리 내역 출력 함수 (최신 내역이 상단에 오도록 유지)
+        // 처리 내역 출력 함수 (최신 내역이 상단에 오도록 prepend 사용)
         function addHistory(message) {
             const historyList = document.getElementById('emailHistory');
             const newItem = document.createElement('li');
             const now = new Date().toLocaleTimeString();
             newItem.innerHTML = `[${now}] ${message}`;
-            historyList.prepend(newItem); // 최근 내역이 위로 올라가게 처리
+            historyList.prepend(newItem);
         }
 
         // 페이지 로드 시 구글 API 클라이언트 초기화 및 자동 실행
@@ -56,7 +55,6 @@
                 }).then(() => {
                     isGapiLoaded = true;
                     addHistory("✅ 구글 API 로드 완료. 자동 로그인을 시도합니다.");
-                    // API 로드가 끝나면 즉시 봇 시작 함수 호출 (자동 실행)
                     startBot();
                 });
             });
@@ -76,7 +74,7 @@
                         document.getElementById('stopBtn').disabled = false;
                         addHistory("✅ 구글 로그인 승인 완료. 메일 감시를 시작합니다.");
                         
-                        // 3분마다 확인 (필요시 시간 조절)
+                        // 3분마다 확인
                         botInterval = setInterval(checkGmail, 180000);
                         checkGmail(); 
                     }
@@ -87,7 +85,6 @@
                 }
             });
 
-            // 권한 요청 팝업 띄우기 (자동 실행 지점)
             if (accessToken === null) {
                 tokenClient.requestAccessToken({prompt: 'consent'});
             } else {
@@ -103,19 +100,20 @@
             addHistory("🛑 자동 확인이 수동으로 중지되었습니다.");
         }
 
-        // Gmail API로 최신 이메일 확인
+        // Gmail API로 최신 이메일 확인 (제목 조건 추가)
         async function checkGmail() {
             addHistory("🔍 넷플릭스 메일 검색 중...");
             try {
+                // 발신자 조건과 정확한 제목 조건을 모두 포함하여 검색
                 const response = await gapi.client.gmail.users.messages.list({
                     'userId': 'me',
-                    'q': 'from:info@account.netflix.com',
+                    'q': 'from:info@account.netflix.com subject:"넷플릭스 이용 가구를 업데이트하는 방법"',
                     'maxResults': 1
                 });
 
                 const messages = response.result.messages;
                 if (!messages || messages.length === 0) {
-                    addHistory("새로운 메일이 없습니다.");
+                    addHistory("조건에 맞는 새로운 메일이 없습니다.");
                     return;
                 }
                 const messageId = messages[0].id;
@@ -125,37 +123,32 @@
             }
         }
 
-        // 이메일 본문 읽기, 정보 추출 및 링크 클릭
+        // 이메일 본문 읽기, 정보 추출 및 백그라운드 링크 클릭
         async function processEmail(messageId) {
             try {
                 const message = await gapi.client.gmail.users.messages.get({
                     'userId': 'me', 'id': messageId, 'format': 'full'
                 });
-        
-                // 1. 이메일 헤더에서 제목과 수신 시간 추출하기
+
+                // 1. 헤더에서 제목과 날짜 추출
                 const headers = message.result.payload.headers;
                 let subject = "제목 없음";
                 let dateStr = "";
-        
+
                 for (let i = 0; i < headers.length; i++) {
-                    if (headers[i].name.toLowerCase() === 'subject') {
-                        subject = headers[i].value;
-                    } else if (headers[i].name.toLowerCase() === 'date') {
-                        dateStr = headers[i].value;
-                    }
+                    if (headers[i].name.toLowerCase() === 'subject') subject = headers[i].value;
+                    else if (headers[i].name.toLowerCase() === 'date') dateStr = headers[i].value;
                 }
-        
-                // 수신 시간을 한국어 형식에 맞게 변환
+
                 let receivedDate = "시간 알 수 없음";
                 if (dateStr) {
                     const dateObj = new Date(dateStr);
-                    receivedDate = dateObj.toLocaleString('ko-KR'); // 예: 2026. 2. 21. 오후 4:15:00
+                    receivedDate = dateObj.toLocaleString('ko-KR'); 
                 }
-        
-                // 화면에 제목과 수신 시간 먼저 출력
+
                 addHistory(`📧 <b>제목:</b> ${subject} <br>&nbsp;&nbsp;&nbsp;&nbsp;🕒 <b>수신:</b> ${receivedDate}`);
-        
-                // 2. 이메일 본문 추출
+
+                // 2. 본문 데이터 추출
                 let bodyData = '';
                 const parts = message.result.payload.parts;
                 
@@ -165,21 +158,29 @@
                 } else {
                     bodyData = message.result.payload.body.data;
                 }
-        
+
                 if (!bodyData) return;
-        
+
                 // Base64Url 디코딩
                 const decodedBody = decodeURIComponent(escape(atob(bodyData.replace(/-/g, '+').replace(/_/g, '/'))));
                 
-                // 3. 정확한 위치 업데이트 링크 찾기
+                // 3. 링크 찾기 및 백그라운드 신호 전송
                 const linkRegex = /href="(https:\/\/www\.netflix\.com\/account\/update-primary-location\?nftoken=[^"]*)"/i;
                 const match = decodedBody.match(linkRegex);
-        
+
                 if (match && match[1]) {
                     const authUrl = match[1].replace(/&amp;/g, '&');
                     
-                    addHistory(`<span class="highlight">▶ 정확한 위치 업데이트 링크 발견! 새 창으로 엽니다.</span>`);
-                    window.open(authUrl, 'netflix_auth');
+                    addHistory(`<span class="highlight">▶ 인증 링크 발견! 백그라운드에서 조용히 클릭 처리를 시도합니다.</span>`);
+                    
+                    try {
+                        // 팝업 없이 백그라운드에서 신호만 전송 (no-cors)
+                        await fetch(authUrl, { mode: 'no-cors' });
+                        addHistory("✔️ 백그라운드 신호 전송 완료. (참고: 넷플릭스 측 차단 여부는 확인 불가)");
+                    } catch (e) {
+                        addHistory("❌ 백그라운드 신호 전송 실패. 수동 확인이 필요할 수 있습니다.");
+                    }
+
                 } else {
                     addHistory("본문에서 'update-primary-location' 링크를 찾을 수 없습니다.");
                 }
