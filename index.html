@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>넷플릭스 이메일 자동 확인기</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .box { border: 1px solid #ccc; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
+        ul { list-style-type: none; padding: 0; }
+        li { padding: 5px 0; border-bottom: 1px dashed #eee; font-size: 14px; }
+        .highlight { font-weight: bold; color: #d81f26; }
+    </style>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="https://apis.google.com/js/api.js" async defer></script>
+</head>
+<body>
+
+    <div class="box">
+        <h2>⚙️ API 설정</h2>
+        <input type="text" id="clientId" placeholder="Google Client ID 입력" style="width: 350px;">
+        <button onclick="saveSettings()">설정 저장</button>
+    </div>
+
+    <div class="box">
+        <h2>▶️ 자동화 제어</h2>
+        <p>※ 주의: 팝업 차단이 해제되어 있어야 하며, 이 창을 닫으면 작동이 중지됩니다.</p>
+        <button onclick="startBot()" id="startBtn">봇 시작 (구글 로그인)</button>
+        <button onclick="stopBot()" id="stopBtn" disabled>봇 정지</button>
+    </div>
+
+    <div class="box">
+        <h2>📝 이메일 확인 내역</h2>
+        <ul id="emailHistory">
+            </ul>
+    </div>
+
+    <script>
+        let botInterval;
+        let tokenClient;
+        let accessToken = null;
+        let isGapiLoaded = false;
+
+        // 1. 페이지 로드 시 구글 API 클라이언트 초기화 및 설정 불러오기
+        window.onload = function() {
+            const savedId = localStorage.getItem('googleClientId');
+            if(savedId) document.getElementById('clientId').value = savedId;
+
+            // gapi 라이브러리 로드
+            gapi.load('client', () => {
+                gapi.client.init({
+                    discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest']
+                }).then(() => {
+                    isGapiLoaded = true;
+                    addHistory("✅ 시스템: 구글 API 로드 완료. 봇을 시작할 수 있습니다.");
+                });
+            });
+        };
+
+        // 설정 저장 함수
+        function saveSettings() {
+            const clientId = document.getElementById('clientId').value.trim();
+            if(!clientId) {
+                alert("Client ID를 입력해주세요.");
+                return;
+            }
+            localStorage.setItem('googleClientId', clientId);
+            alert('설정이 브라우저에 저장되었습니다.');
+        }
+
+        // 처리 내역 출력 함수
+        function addHistory(message) {
+            const historyList = document.getElementById('emailHistory');
+            const newItem = document.createElement('li');
+            const now = new Date().toLocaleTimeString();
+            newItem.innerHTML = `[${now}] ${message}`;
+            
+            // 최신 메일 처리 내역이 기본값으로 목록 상단에 보이도록 prepend 사용
+            historyList.prepend(newItem);
+        }
+
+        // 2. 봇 시작 (구글 로그인 및 권한 획득)
+        function startBot() {
+            const clientId = localStorage.getItem('googleClientId');
+            if(!clientId) {
+                alert("먼저 API 설정에 Client ID를 입력하고 저장해주세요.");
+                return;
+            }
+            if(!isGapiLoaded) {
+                alert("구글 API가 아직 로드되지 않았습니다. 잠시 후 다시 시도해주세요.");
+                return;
+            }
+
+            // Google 인증 클라이언트 초기화
+            tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: clientId,
+                scope: 'https://www.googleapis.com/auth/gmail.readonly',
+                callback: (tokenResponse) => {
+                    if (tokenResponse && tokenResponse.access_token) {
+                        accessToken = tokenResponse.access_token;
+                        document.getElementById('startBtn').disabled = true;
+                        document.getElementById('stopBtn').disabled = false;
+                        addHistory("✅ 구글 로그인 및 권한 승인 완료. 자동 확인을 시작합니다.");
+                        
+                        // 주기적 확인 실행 (예: 3분 = 180000ms마다)
+                        botInterval = setInterval(checkGmail, 180000);
+                        checkGmail(); // 시작 즉시 1회 실행
+                    }
+                },
+            });
+
+            // 권한 요청 팝업 띄우기
+            if (accessToken === null) {
+                tokenClient.requestAccessToken({prompt: 'consent'});
+            } else {
+                tokenClient.requestAccessToken({prompt: ''});
+            }
+        }
+
+        // 봇 정지
+        function stopBot() {
+            clearInterval(botInterval);
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            addHistory("🛑 자동 확인이 중지되었습니다.");
+        }
+
+        // 3. Gmail API로 최신 이메일 확인
+        async function checkGmail() {
+            addHistory("🔍 넷플릭스 메일 검색 중...");
+            try {
+                // 최신 메일 1개만 검색
+                const response = await gapi.client.gmail.users.messages.list({
+                    'userId': 'me',
+                    'q': 'from:info@account.netflix.com',
+                    'maxResults': 1
+                });
+
+                const messages = response.result.messages;
+                if (!messages || messages.length === 0) {
+                    addHistory("새로운 넷플릭스 메일이 없습니다.");
+                    return;
+                }
+
+                const messageId = messages[0].id;
+                await processEmail(messageId);
+
+            } catch (error) {
+                addHistory("❌ 이메일 검색 오류 발생: " + error.message);
+                console.error(error);
+            }
+        }
+
+        // 4. 이메일 본문 읽기 및 링크 추출
+        async function processEmail(messageId) {
+            try {
+                const message = await gapi.client.gmail.users.messages.get({
+                    'userId': 'me',
+                    'id': messageId,
+                    'format': 'full'
+                });
+
+                // 본문 추출 (Base64url 디코딩)
+                let bodyData = '';
+                const parts = message.result.payload.parts;
+                
+                if (parts && parts.length > 0) {
+                    // HTML 본문 찾기
+                    const htmlPart = parts.find(part => part.mimeType === 'text/html');
+                    if (htmlPart && htmlPart.body.data) {
+                        bodyData = htmlPart.body.data;
+                    } else {
+                        bodyData = parts[0].body.data; // fallback
+                    }
+                } else {
+                    bodyData = message.result.payload.body.data;
+                }
+
+                if (!bodyData) {
+                    addHistory("본문 데이터를 찾을 수 없습니다.");
+                    return;
+                }
+
+                // Base64Url -> 일반 텍스트 변환
+                const decodedBody = decodeURIComponent(escape(atob(bodyData.replace(/-/g, '+').replace(/_/g, '/'))));
+
+                // "네, 본인입니다" 혹은 특정 버튼의 링크를 정규식으로 찾기
+                // 넷플릭스 메일 HTML 구조에 따라 "https://www.netflix.com/account/update..." 형태의 링크를 찾습니다.
+                const linkRegex = /href="(https:\/\/[^"]*netflix\.com[^"]*)"/i;
+                const match = decodedBody.match(linkRegex);
+
+                if (match && match[1]) {
+                    const authUrl = match[1];
+                    addHistory(`<span class="highlight">인증 링크 발견! 클릭을 시도합니다.</span>`);
+                    
+                    // 새 탭(팝업)으로 링크 열어 자동 클릭 대체
+                    // 동일한 이름의 창('netflix_auth')을 사용하여 창이 무한정 늘어나는 것을 방지
+                    window.open(authUrl, 'netflix_auth');
+                    addHistory("인증 페이지를 새 창으로 열었습니다.");
+                } else {
+                    addHistory("메일 본문에서 인증 링크를 찾을 수 없습니다.");
+                }
+
+            } catch (error) {
+                addHistory("❌ 이메일 읽기 오류 발생: " + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
